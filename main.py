@@ -19,7 +19,7 @@ embeddings = OllamaEmbeddings(model="nomic-embed-text")
 llm = OllamaLLM(model="llama3.2:latest", temperature=0.0)
 
 vectorstore = PineconeVectorStore(
-    index_name=os.environ["INDEX_NAME"],
+    index_name=os.environ["INDEX_NAME_TXT"],
     embedding=embeddings,
 )
 
