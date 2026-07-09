@@ -15,7 +15,7 @@ class AgentResponse(BaseModel):
     answer:str = Field(description="The agent's answer to the query")
     sources: List[Source] = Field(default_factory=list, description="List of sources used to generate the answer")
 
-llm = ChatOllama(temperature=0, model="llama3.2")
+llm = ChatOllama(temperature=0, model="llama3.2:latest")
 tools = [TavilySearch()]
 agent = create_agent(llm, tools=tools, response_format=AgentResponse)
 def main():

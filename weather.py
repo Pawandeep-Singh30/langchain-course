@@ -18,8 +18,11 @@ import urllib.request
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from langchain.agents import create_agent
+from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 from langchain_ollama import ChatOllama
+
+MODEL = "llama3.1:8b"
 
 # --- WEATHER API HELPERS (plain Python, not LangChain) -----------------------
 # These fetch real data from wttr.in. The agent never calls them directly —
@@ -105,21 +108,48 @@ def compare_weather(city_a: str, city_b: str) -> str:
     except Exception as e:
         return f"Could not compare {city_a} and {city_b}: {e}"
 
+def _resolve_timezone(location: str) -> tuple[str, str]:
+    """Resolve a city name or IANA timezone to (display_name, iana_timezone)."""
+    location = location.strip()
+    if "/" in location:
+        return location, location
+
+    query = urllib.parse.quote(location)
+    url = f"https://geocoding-api.open-meteo.com/v1/search?name={query}&count=1"
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "langchain-course/1.0"},
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:
+        data = json.loads(response.read().decode("utf-8"))
+
+    results = data.get("results") or []
+    if not results:
+        raise ValueError(f"Could not find timezone for '{location}'")
+
+    place = results[0]
+    name = place.get("name", location)
+    country = place.get("country", "")
+    timezone = place["timezone"]
+    display = f"{name}, {country}" if country else name
+    return display, timezone
+
 @tool
-def get_time(timezone: str) -> str:
-    """Get the current local time for an IANA timezone.
+def get_time(location: str) -> str:
+    """Get the current local time for a city or IANA timezone.
     Use when the user asks what time it is somewhere — NOT for weather questions.
     Args:
-        timezone: IANA timezone name, e.g. 'Asia/Kuala_Lumpur', 'Europe/London'
+        location: City name like 'Amritsar, India' or IANA timezone like 'Asia/Kuala_Lumpur'
     """
     try:
+        display, timezone = _resolve_timezone(location)
         now = datetime.now(ZoneInfo(timezone))
         formatted = now.strftime("%I:%M %p, %A %d %B %Y")
-        return f"Current time in {timezone}: {formatted}"
+        return f"Current time in {display}: {formatted}"
     except Exception as e:
         return (
-            f"Could not get time for {timezone}: {e}. "
-            "Use IANA names like 'Asia/Kuala_Lumpur'."
+            f"Could not get time for {location}: {e}. "
+            "Try a city like 'Amritsar, India' or a timezone like 'Asia/Kuala_Lumpur'."
         )
 
 # --- AGENT SETUP (LangChain) --------------------------------------------------
@@ -129,16 +159,18 @@ def get_time(timezone: str) -> str:
 # The LLM reads each tool's docstring + system_prompt to decide which tool to call.
 
 def build_agent():
-    llm = ChatOllama(model="llama3.2")
+    llm = ChatOllama(model=MODEL, temperature=0)
     return create_agent(
         llm,
         # Pass all tools — the model picks the right one per question
         tools=[get_weather, compare_weather, get_time],
         system_prompt=(
             "You are a helpful weather and time assistant. "
+            "Always call the appropriate tool instead of guessing. "
             "Use get_weather for a single city's weather. "
             "Use compare_weather when comparing TWO cities — always prefer it for comparisons. "
-            "Use get_time for time questions. "
+            "Use get_time for time questions with the location argument "
+            "(city like 'Amritsar, India' or timezone like 'Asia/Kuala_Lumpur'). "
             "Never invent data. Use full city names like 'Kuala Lumpur, Malaysia'. "
             "Answer directly without preamble."
         ),
@@ -151,7 +183,7 @@ def main():
     agent = build_agent()
     print("Weather agent (type 'quit' to exit)\n")
     print("Try: 'weather in Taiping', 'compare Taiping and Kuala Lumpur',")
-    print("     'what time is it in Asia/Kuala_Lumpur'\n")
+    print("     'time in Amritsar, India', 'what time is it in Asia/Kuala_Lumpur'\n")
     history = []
     while True:
         question = input("You: ").strip()
@@ -160,7 +192,7 @@ def main():
         if question.lower() in ("quit", "exit", "q"):
             print("Bye!")
             break
-        history.append(("human", question))
+        history.append(HumanMessage(content=question))
         # agent.invoke runs the full LangGraph loop for this turn
         result = agent.invoke({"messages": history})
         # Keep ALL messages (including tool calls/results), not just the answer.
